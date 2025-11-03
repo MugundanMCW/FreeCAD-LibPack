@@ -860,56 +860,71 @@ class Compiler:
             if os.path.exists(os.path.join(self.install_dir, "include", "ifcparse")):
                 print("  Not rebuilding IfcOpenShell, it is already in the LibPack")
                 return
-        
+    
+        # Store the IfcOpenShell root directory
+        ifcos_root = os.getcwd()
+    
         # Handle patches
         if "patches" in options:
-            patches_dir = os.path.join(os.getcwd(), "win", "patches")
+            patches_dir = os.path.join(ifcos_root, "win", "patches")
             os.makedirs(patches_dir, exist_ok=True)
-            
+    
             for patch in options["patches"]:
                 patch_name = os.path.basename(patch)
                 source_patch = os.path.join(self.base_dir, patch)
                 dest_patch = os.path.join(patches_dir, patch_name)
-                
+    
                 if patch_name == "build-deps-arm-support.patch":
                     if os.path.exists(source_patch):
                         print(f"  Applying patch {patch_name} from IfcOpenShell root...")
                         try:
-                            # Apply patch from the current directory (IfcOpenShell root)
-                            result = subprocess.run(
-                                ["git", "apply", source_patch],
-                                check=True,
+                            # Check if patch can be applied
+                            check_result = subprocess.run(
+                                ["git", "apply", "--check", source_patch],
                                 capture_output=True,
-                                cwd=os.getcwd()
+                                cwd=ifcos_root
                             )
-                            print(f"  Patch {patch_name} applied successfully")
+                            
+                            if check_result.returncode == 0:
+                                # Apply the patch
+                                subprocess.run(
+                                    ["git", "apply", source_patch],
+                                    check=True,
+                                    capture_output=True,
+                                    cwd=ifcos_root
+                                )
+                                print(f"  ✓ Patch {patch_name} applied successfully")
+                            else:
+                                print(f"  ℹ Patch {patch_name} already applied or not needed")
                         except subprocess.CalledProcessError as e:
-                            print(f"  Warning: Failed to apply patch {patch_name}")
-                            print(e.stdout.decode("utf-8", errors="ignore"))
+                            print(f"  ⚠ Warning: Failed to apply patch {patch_name}")
+                            if e.stdout:
+                                print(e.stdout.decode("utf-8", errors="ignore"))
                             if e.stderr:
                                 print(e.stderr.decode("utf-8", errors="ignore"))
                     else:
-                        print(f"  Warning: Patch file not found: {source_patch}")
+                        print(f"  ⚠ Warning: Patch file not found: {source_patch}")
                 else:
                     # Copy other patches to win/patches/
                     if os.path.exists(source_patch):
                         print(f"  Copying patch {patch_name} to IfcOpenShell win/patches/")
                         shutil.copy(source_patch, dest_patch)
                     else:
-                        print(f"  Warning: Patch file not found: {source_patch}")
-        
-        win_dir = os.path.join(os.getcwd(), "win")
+                        print(f"  ⚠ Warning: Patch file not found: {source_patch}")
+    
+        win_dir = os.path.join(ifcos_root, "win")
         if not os.path.exists(win_dir):
             print("ERROR: IfcOpenShell win/ directory not found. Make sure repository is cloned correctly.")
             exit(1)
+        
         os.chdir(win_dir)
     
         vs_version = "vs2022"
         platform_str = "arm64" if platform.machine() == "ARM64" else "x64"
         vs_platform = f"{vs_version}-{platform_str}"
-        
+    
         build_cfg = "RelWithDebInfo" if self.mode == BuildMode.RELEASE else "Debug"
-        
+    
         print(f"  Building IfcOpenShell dependencies using {vs_platform} {build_cfg}")
     
         env = os.environ.copy()
@@ -918,13 +933,13 @@ class Compiler:
             python_version = self.get_python_version()
             env["PYTHONHOME"] = os.path.join(self.install_dir, "bin")
             print(f"  Using LibPack Python {python_version}")
-        
+    
         # Run build-deps.cmd
         build_deps_cmd = os.path.join(win_dir, "build-deps.cmd")
         if not os.path.exists(build_deps_cmd):
             print("ERROR: build-deps.cmd not found in win/ directory")
             exit(1)
-        
+    
         try:
             print("  Running build-deps.cmd (this will take a long time, 2-4 hours)...")
             result = subprocess.run(
@@ -934,14 +949,14 @@ class Compiler:
                 env=env,
                 cwd=win_dir
             )
-            print("  Dependencies built successfully")
+            print("  ✓ Dependencies built successfully")
         except subprocess.CalledProcessError as e:
             print("ERROR: IfcOpenShell build-deps.cmd failed!")
             print(e.stdout.decode("utf-8", errors="ignore"))
             if e.stderr:
                 print(e.stderr.decode("utf-8", errors="ignore"))
             exit(e.returncode)
-        
+    
         run_cmake_bat = os.path.join(win_dir, "run-cmake.bat")
         if os.path.exists(run_cmake_bat):
             try:
@@ -953,13 +968,14 @@ class Compiler:
                     env=env,
                     cwd=win_dir
                 )
+                print("  ✓ CMake configuration complete")
             except subprocess.CalledProcessError as e:
                 print("ERROR: IfcOpenShell CMake configuration failed!")
                 print(e.stdout.decode("utf-8", errors="ignore"))
                 if e.stderr:
                     print(e.stderr.decode("utf-8", errors="ignore"))
                 exit(e.returncode)
-        
+    
         install_bat = os.path.join(win_dir, "install-ifcopenshell.bat")
         if os.path.exists(install_bat):
             try:
@@ -971,14 +987,16 @@ class Compiler:
                     env=env,
                     cwd=win_dir
                 )
+                print("  ✓ IfcOpenShell build complete")
             except subprocess.CalledProcessError as e:
                 print("ERROR: IfcOpenShell installation failed!")
                 print(e.stdout.decode("utf-8", errors="ignore"))
                 if e.stderr:
                     print(e.stderr.decode("utf-8", errors="ignore"))
                 exit(e.returncode)
-        self._copy_ifcopenshell_to_libpack(vs_platform)
         
+        self._copy_ifcopenshell_to_libpack(vs_platform)
+    
         os.chdir(self.base_dir)
     
     def _copy_ifcopenshell_to_libpack(self, vs_platform):
