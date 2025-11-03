@@ -856,78 +856,183 @@ class Compiler:
             exit(1)
 
     def build_ifcopenshell(self, options: dict):
-        """Build IfcOpenShell library for working with Industry Foundation Classes (IFC)"""
         if self.skip_existing:
-            if os.path.exists(os.path.join(self.install_dir, "lib", "ifcopenshell.lib")):
+            if os.path.exists(os.path.join(self.install_dir, "include", "ifcparse")):
                 print("  Not rebuilding IfcOpenShell, it is already in the LibPack")
                 return
+        
+        # Handle patches
         if "patches" in options:
-            patch_files(options["patches"])
-        extra_args = [
-            "-D BUILD_SHARED_LIBS=ON",
-            "-D BUILD_EXAMPLES=OFF",
-            "-D BUILD_IFCPYTHON=ON", 
-            "-D BUILD_IFCGEOM=ON",  
-            "-D BUILD_GEOMSERVER=OFF",
-            "-D COLLADA_SUPPORT=ON",
-            "-D CGAL_INCLUDE_DIR=" + os.path.join(self.install_dir, "include"),
-            "-D OCC_INCLUDE_DIR=" + os.path.join(self.install_dir, "include", "opencascade"),
-            "-D OCC_LIBRARY_DIR=" + os.path.join(self.install_dir, "lib"),
-            "-D ICU_ENABLED=OFF",
-            "-D HDF5_SUPPORT=ON",
-            "-D HDF5_INCLUDE_DIR=" + os.path.join(self.install_dir, "include"),
-            "-D LIBXML2_INCLUDE_DIR=" + os.path.join(self.install_dir, "include", "libxml2"),
-            "-D LIBXML2_LIBRARIES=" + os.path.join(self.install_dir, "lib", "libxml2.lib"),
-        ]
+            patches_dir = os.path.join(os.getcwd(), "win", "patches")
+            os.makedirs(patches_dir, exist_ok=True)
+            
+            for patch in options["patches"]:
+                patch_name = os.path.basename(patch)
+                source_patch = os.path.join(self.base_dir, patch)
+                dest_patch = os.path.join(patches_dir, patch_name)
+                
+                if patch_name == "build-deps-arm-support.patch":
+                    if os.path.exists(source_patch):
+                        print(f"  Applying patch {patch_name} from IfcOpenShell root...")
+                        try:
+                            # Apply patch from the current directory (IfcOpenShell root)
+                            result = subprocess.run(
+                                ["git", "apply", source_patch],
+                                check=True,
+                                capture_output=True,
+                                cwd=os.getcwd()
+                            )
+                            print(f"  Patch {patch_name} applied successfully")
+                        except subprocess.CalledProcessError as e:
+                            print(f"  Warning: Failed to apply patch {patch_name}")
+                            print(e.stdout.decode("utf-8", errors="ignore"))
+                            if e.stderr:
+                                print(e.stderr.decode("utf-8", errors="ignore"))
+                    else:
+                        print(f"  Warning: Patch file not found: {source_patch}")
+                else:
+                    # Copy other patches to win/patches/
+                    if os.path.exists(source_patch):
+                        print(f"  Copying patch {patch_name} to IfcOpenShell win/patches/")
+                        shutil.copy(source_patch, dest_patch)
+                    else:
+                        print(f"  Warning: Patch file not found: {source_patch}")
         
-        # Windows ARM64
-        if platform.machine() == "ARM64" and sys.platform.startswith("win32"):
-            print("  (NOTE: Configuring IfcOpenShell for Windows ARM64)")
-            extra_args.extend([
-                "-D CMAKE_SYSTEM_PROCESSOR=ARM64",
-                "-D CMAKE_GENERATOR_PLATFORM=ARM64",
-            ])
-        
-        python_version = self.get_python_version()
-        extra_args.extend([
-            f"-D PYTHON_EXECUTABLE={self.python_exe()}",
-            f"-D PYTHON_INCLUDE_DIR={os.path.join(self.install_dir, 'bin', 'Include')}",
-            f"-D PYTHON_LIBRARY={os.path.join(self.install_dir, 'bin', 'libs', f'python{python_version.replace('.', '')}.lib')}",
-        ])
-        
-        if "disable-python" in options and options["disable-python"]:
-            extra_args.append("-D BUILD_IFCPYTHON=OFF")
-            print("  Python bindings disabled")
+        win_dir = os.path.join(os.getcwd(), "win")
+        if not os.path.exists(win_dir):
+            print("ERROR: IfcOpenShell win/ directory not found. Make sure repository is cloned correctly.")
+            exit(1)
+        os.chdir(win_dir)
     
-        self._build_standard_cmake(extra_args)
-    
-        if "disable-python" not in options or not options["disable-python"]:
-            self._install_ifcopenshell_python_module()
-    
-    def _install_ifcopenshell_python_module(self):
-        """Copy IfcOpenShell Python module to the LibPack's Python site-packages"""
-        python_version = self.get_python_version()
-        site_packages = os.path.join(
-            self.install_dir, "bin", "Lib", "site-packages"
-        )
-        build_dir = "build-" + str(self.mode).lower()
-        ifcopenshell_module = None
+        vs_version = "vs2022"
+        platform_str = "arm64" if platform.machine() == "ARM64" else "x64"
+        vs_platform = f"{vs_version}-{platform_str}"
         
-        for root, dirs, files in os.walk(build_dir):
-            for file in files:
-                if file.startswith("ifcopenshell") and (file.endswith(".pyd")):
-                    ifcopenshell_module = os.path.join(root, file)
-                    break
-            if ifcopenshell_module:
+        build_cfg = "RelWithDebInfo" if self.mode == BuildMode.RELEASE else "Debug"
+        
+        print(f"  Building IfcOpenShell dependencies using {vs_platform} {build_cfg}")
+    
+        env = os.environ.copy()
+        if os.path.exists(self.python_exe()):
+            env["IFCOS_INSTALL_PYTHON"] = "FALSE"
+            python_version = self.get_python_version()
+            env["PYTHONHOME"] = os.path.join(self.install_dir, "bin")
+            print(f"  Using LibPack Python {python_version}")
+        
+        # Run build-deps.cmd
+        build_deps_cmd = os.path.join(win_dir, "build-deps.cmd")
+        if not os.path.exists(build_deps_cmd):
+            print("ERROR: build-deps.cmd not found in win/ directory")
+            exit(1)
+        
+        try:
+            print("  Running build-deps.cmd (this will take a long time, 2-4 hours)...")
+            result = subprocess.run(
+                [self.init_script, "&", build_deps_cmd, vs_platform, build_cfg],
+                check=True,
+                capture_output=True,
+                env=env,
+                cwd=win_dir
+            )
+            print("  Dependencies built successfully")
+        except subprocess.CalledProcessError as e:
+            print("ERROR: IfcOpenShell build-deps.cmd failed!")
+            print(e.stdout.decode("utf-8", errors="ignore"))
+            if e.stderr:
+                print(e.stderr.decode("utf-8", errors="ignore"))
+            exit(e.returncode)
+        
+        run_cmake_bat = os.path.join(win_dir, "run-cmake.bat")
+        if os.path.exists(run_cmake_bat):
+            try:
+                print("  Configuring IfcOpenShell with CMake...")
+                subprocess.run(
+                    [self.init_script, "&", run_cmake_bat, vs_platform, build_cfg],
+                    check=True,
+                    capture_output=True,
+                    env=env,
+                    cwd=win_dir
+                )
+            except subprocess.CalledProcessError as e:
+                print("ERROR: IfcOpenShell CMake configuration failed!")
+                print(e.stdout.decode("utf-8", errors="ignore"))
+                if e.stderr:
+                    print(e.stderr.decode("utf-8", errors="ignore"))
+                exit(e.returncode)
+        
+        install_bat = os.path.join(win_dir, "install-ifcopenshell.bat")
+        if os.path.exists(install_bat):
+            try:
+                print("  Building and installing IfcOpenShell...")
+                subprocess.run(
+                    [self.init_script, "&", install_bat, vs_platform, build_cfg],
+                    check=True,
+                    capture_output=True,
+                    env=env,
+                    cwd=win_dir
+                )
+            except subprocess.CalledProcessError as e:
+                print("ERROR: IfcOpenShell installation failed!")
+                print(e.stdout.decode("utf-8", errors="ignore"))
+                if e.stderr:
+                    print(e.stderr.decode("utf-8", errors="ignore"))
+                exit(e.returncode)
+        self._copy_ifcopenshell_to_libpack(vs_platform)
+        
+        os.chdir(self.base_dir)
+    
+    def _copy_ifcopenshell_to_libpack(self, vs_platform):
+        """Copy IfcOpenShell build results to the LibPack installation directory"""
+        parent_dir = os.path.dirname(os.getcwd()) 
+        ifcos_install_pattern = f"installed-{vs_platform}"
+        
+        # Find the installation directory
+        ifcos_install_dir = None
+        for item in os.listdir(parent_dir):
+            if item.startswith("installed-") and vs_platform in item.upper():
+                ifcos_install_dir = os.path.join(parent_dir, item)
                 break
         
-        if ifcopenshell_module and os.path.exists(ifcopenshell_module):
-            os.makedirs(site_packages, exist_ok=True)
-            target = os.path.join(site_packages, os.path.basename(ifcopenshell_module))
-            print(f"  Installing IfcOpenShell Python module to {target}")
-            shutil.copy(ifcopenshell_module, target)
-        else:
-            print("  Warning: Could not find IfcOpenShell Python module to install")
+        if not ifcos_install_dir or not os.path.exists(ifcos_install_dir):
+            print(f"  Warning: Could not find IfcOpenShell installation directory matching '{ifcos_install_pattern}'")
+            return
+        
+        print(f"  Copying IfcOpenShell from {ifcos_install_dir} to {self.install_dir}")
+        
+        # Copy include files
+        src_include = os.path.join(ifcos_install_dir, "include")
+        if os.path.exists(src_include):
+            dest_include = os.path.join(self.install_dir, "include")
+            shutil.copytree(src_include, dest_include, dirs_exist_ok=True)
+        
+        # Copy library files
+        src_lib = os.path.join(ifcos_install_dir, "lib")
+        if os.path.exists(src_lib):
+            dest_lib = os.path.join(self.install_dir, "lib")
+            shutil.copytree(src_lib, dest_lib, dirs_exist_ok=True)
+    
+        # Copy binary files
+        src_bin = os.path.join(ifcos_install_dir, "bin")
+        if os.path.exists(src_bin):
+            dest_bin = os.path.join(self.install_dir, "bin")
+            shutil.copytree(src_bin, dest_bin, dirs_exist_ok=True)
+     
+        # Copy Python module if it exists
+        python_version = self.get_python_version()
+        site_packages = os.path.join(self.install_dir, "bin", "Lib", "site-packages")
+        
+        # Look for Python modules in the IfcOpenShell installation
+        for root, dirs, files in os.walk(ifcos_install_dir):
+            for file in files:
+                if file.startswith("ifcopenshell") and file.endswith(".pyd"):
+                    src_pyd = os.path.join(root, file)
+                    dest_pyd = os.path.join(site_packages, file)
+                    os.makedirs(site_packages, exist_ok=True)
+                    shutil.copy(src_pyd, dest_pyd)
+                    print(f"    ✓ Copied Python module: {file}")
+                    break
+        
+        print("  IfcOpenShell successfully integrated into LibPack")
 
     def build_vtk(self, _=None):
         if self.skip_existing:
