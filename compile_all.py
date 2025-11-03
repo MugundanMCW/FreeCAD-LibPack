@@ -855,7 +855,7 @@ class Compiler:
                 print(e.stderr.decode("utf-8"))
             exit(1)
 
-        def build_ifcopenshell(self, options: dict):
+    def build_ifcopenshell(self, options: dict):
         """Build IfcOpenShell library for working with Industry Foundation Classes (IFC)"""
         if self.skip_existing:
             if os.path.exists(os.path.join(self.install_dir, "lib", "ifcopenshell.lib")):
