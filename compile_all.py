@@ -855,6 +855,80 @@ class Compiler:
                 print(e.stderr.decode("utf-8"))
             exit(1)
 
+        def build_ifcopenshell(self, options: dict):
+        """Build IfcOpenShell library for working with Industry Foundation Classes (IFC)"""
+        if self.skip_existing:
+            if os.path.exists(os.path.join(self.install_dir, "lib", "ifcopenshell.lib")):
+                print("  Not rebuilding IfcOpenShell, it is already in the LibPack")
+                return
+        if "patches" in options:
+            patch_files(options["patches"])
+        extra_args = [
+            "-D BUILD_SHARED_LIBS=ON",
+            "-D BUILD_EXAMPLES=OFF",
+            "-D BUILD_IFCPYTHON=ON", 
+            "-D BUILD_IFCGEOM=ON",  
+            "-D BUILD_GEOMSERVER=OFF",
+            "-D COLLADA_SUPPORT=ON",
+            "-D CGAL_INCLUDE_DIR=" + os.path.join(self.install_dir, "include"),
+            "-D OCC_INCLUDE_DIR=" + os.path.join(self.install_dir, "include", "opencascade"),
+            "-D OCC_LIBRARY_DIR=" + os.path.join(self.install_dir, "lib"),
+            "-D ICU_ENABLED=OFF",
+            "-D HDF5_SUPPORT=ON",
+            "-D HDF5_INCLUDE_DIR=" + os.path.join(self.install_dir, "include"),
+            "-D LIBXML2_INCLUDE_DIR=" + os.path.join(self.install_dir, "include", "libxml2"),
+            "-D LIBXML2_LIBRARIES=" + os.path.join(self.install_dir, "lib", "libxml2.lib"),
+        ]
+        
+        # Windows ARM64
+        if platform.machine() == "ARM64" and sys.platform.startswith("win32"):
+            print("  (NOTE: Configuring IfcOpenShell for Windows ARM64)")
+            extra_args.extend([
+                "-D CMAKE_SYSTEM_PROCESSOR=ARM64",
+                "-D CMAKE_GENERATOR_PLATFORM=ARM64",
+            ])
+        
+        python_version = self.get_python_version()
+        extra_args.extend([
+            f"-D PYTHON_EXECUTABLE={self.python_exe()}",
+            f"-D PYTHON_INCLUDE_DIR={os.path.join(self.install_dir, 'bin', 'Include')}",
+            f"-D PYTHON_LIBRARY={os.path.join(self.install_dir, 'bin', 'libs', f'python{python_version.replace('.', '')}.lib')}",
+        ])
+        
+        if "disable-python" in options and options["disable-python"]:
+            extra_args.append("-D BUILD_IFCPYTHON=OFF")
+            print("  Python bindings disabled")
+    
+        self._build_standard_cmake(extra_args)
+    
+        if "disable-python" not in options or not options["disable-python"]:
+            self._install_ifcopenshell_python_module()
+    
+    def _install_ifcopenshell_python_module(self):
+        """Copy IfcOpenShell Python module to the LibPack's Python site-packages"""
+        python_version = self.get_python_version()
+        site_packages = os.path.join(
+            self.install_dir, "bin", "Lib", "site-packages"
+        )
+        build_dir = "build-" + str(self.mode).lower()
+        ifcopenshell_module = None
+        
+        for root, dirs, files in os.walk(build_dir):
+            for file in files:
+                if file.startswith("ifcopenshell") and (file.endswith(".pyd")):
+                    ifcopenshell_module = os.path.join(root, file)
+                    break
+            if ifcopenshell_module:
+                break
+        
+        if ifcopenshell_module and os.path.exists(ifcopenshell_module):
+            os.makedirs(site_packages, exist_ok=True)
+            target = os.path.join(site_packages, os.path.basename(ifcopenshell_module))
+            print(f"  Installing IfcOpenShell Python module to {target}")
+            shutil.copy(ifcopenshell_module, target)
+        else:
+            print("  Warning: Could not find IfcOpenShell Python module to install")
+
     def build_vtk(self, _=None):
         if self.skip_existing:
             if os.path.exists(os.path.join(self.install_dir, "share", "licenses", "VTK")):
