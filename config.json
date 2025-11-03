@@ -238,6 +238,12 @@
             "git-repo": "https://github.com/aewallin/opencamlib",
             "git-ref": "2023.01.11"
         },
+		{
+            "name": "IfcOpenShell",
+            "git-repo": "https://github.com/IfcOpenShell/IfcOpenShell",
+            "git-hash": "f5220fba56761a7dad71e9eb3d1c372b9fdf885f",
+			"note":"Using specific commit to support Windows ARM builds"
+        },
         {
             "name":"calculix",
             "url":"https://drive.usercontent.google.com/download?id=1Z8Mnx9-tyPdPlRi9kdPkFqZhTVA1uemY&export=download&authuser=0&confirm=t&uuid=1808e0cb-38d9-43ea-beea-619109a11527&at=APZUnTWlTXR23jpMPcF6-LBcbOaN:1720405069050",
